@@ -1,12 +1,12 @@
 # gpt-oss-simplechat
 
-A tiny .NET console app that chats with a local LLM via LM Studio using the OpenAI-compatible API and Microsoft.Extensions.AI adapters. It streams responses and separates internal thoughts from the final answer.
+A tiny .NET 9 console app that let's you chat with a local LLM (`gpt-oss-20b` by default) via LM Studio using the OpenAI-compatible API and `Microsoft.Extensions.AI` adapters. It streams responses and separates internal thoughts from the final answer.
 
 ## Requirements
 
 - .NET 9 SDK
 - LM Studio (or any OpenAI-compatible server) running locally
-  - Default endpoint used in this app: http:\//localhost:1234/v1
+  - Default endpoint used in this app: `http://localhost:1234/v1`
   - Dummy API key is accepted by LM Studio: "lm-studio"
 
 ## Dependencies
