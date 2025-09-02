@@ -61,7 +61,7 @@ This repo provides helper scripts to install prerequisites and prepare LM Studio
 - On Linux or macOS: run `./install.sh` (ensures PowerShell 7, then calls the PowerShell installer)
 - Alternatively, on macOS/Windows: run `pwsh -File ./install.ps1`
 
-Hardware note: The `gpt-oss-20b` model requires more than 16 GB GPU VRAM. On Apple Silicon (Unified Memory), this means more than 16 GB system RAM.
+**Hardware note**: The `gpt-oss-20b` model requires more than 16 GB GPU VRAM. On Apple Silicon (Unified Memory), this means more than 16 GB system RAM. Otherwise, LMStudio may not be able to load it. If you try with --gpu=off it may be very slow.
 
 What the installer does:
 
