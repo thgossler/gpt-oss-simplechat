@@ -6,7 +6,7 @@ A tiny .NET console app that chats with a local LLM via LM Studio using the Open
 
 - .NET 9 SDK
 - LM Studio (or any OpenAI-compatible server) running locally
-  - Default endpoint used in this app: http://localhost:1234/v1
+  - Default endpoint used in this app: http:\//localhost:1234/v1
   - Dummy API key is accepted by LM Studio: "lm-studio"
 
 ## Dependencies
@@ -51,7 +51,7 @@ dotnet run
 or
 
 ```bash
-./bin/Debug/net9.0/gpt-oss-test
+./bin/Debug/net9.0/gpt-oss-simplechat
 ```
 
 ## Notes
