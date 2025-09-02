@@ -1,4 +1,7 @@
-﻿// MIT License
+﻿#region // ========== License ==========
+// MIT License
+//
+// Copyright (c) 2025 Thomas Gossler
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -17,6 +20,7 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
+#endregion
 
 using System.ClientModel;
 using Microsoft.Extensions.AI;
@@ -38,7 +42,7 @@ var history = new List<Microsoft.Extensions.AI.ChatMessage>
     new(Microsoft.Extensions.AI.ChatRole.System,
 // System Message
 """
-You are a helpful assistant.
+You are a helpful assistant. Keep your answers concise.
 """)
 };
 
@@ -67,39 +71,22 @@ while (true)
 
 #region // ========== Helpers ==========
 
+const string openThought = "<thought>";
+const string closeThought = "</thought>";
+const string openAnswer = "<answer>";
+const string closeAnswer = "</answer>";
+
 static string CreateUserMessage(string input)
 {
     return !string.IsNullOrWhiteSpace(input) ?
 $"""
 Respond in this format:
-<thought>...</thought>
-<answer>...</answer>
+{openThought}...{closeThought}
+{openAnswer}...{closeAnswer}
 
 User input:
 {input}
 """ : string.Empty;
-}
-
-static void PrintFormattedResponse(string? responseText)
-{
-    if (string.IsNullOrWhiteSpace(responseText))
-    {
-    return; // no output for empty response
-    }
-
-    var (thoughts, answers) = ExtractSections(responseText);
-
-    if (thoughts.Count > 0)
-    {
-        Console.ForegroundColor = ConsoleColor.DarkGray;
-        foreach (var t in thoughts) Console.WriteLine(t);
-        Console.ResetColor();
-    }
-    if (answers.Count > 0)
-    {
-    foreach (var a in answers) Console.WriteLine(a);
-    }
-    // If no tagged content exists, print nothing (drop untagged text entirely)
 }
 
 static (List<string> thoughts, List<string> answers) ExtractSections(string responseText)
@@ -122,53 +109,10 @@ static (List<string> thoughts, List<string> answers) ExtractSections(string resp
         }
     }
 
-    ExtractTag("<thought>", "</thought>", thoughts);
-    ExtractTag("<answer>", "</answer>", answers);
+    ExtractTag(openThought, closeThought, thoughts);
+    ExtractTag(openAnswer, closeAnswer, answers);
 
     return (thoughts, answers);
-}
-
-static bool TryFlushCompletedSections(System.Text.StringBuilder buffer, ref int processedIdx)
-{
-    bool printed = false;
-    while (true)
-    {
-        var s = buffer.ToString();
-        int nextThought = s.IndexOf("<thought>", processedIdx, StringComparison.OrdinalIgnoreCase);
-        int nextAnswer = s.IndexOf("<answer>", processedIdx, StringComparison.OrdinalIgnoreCase);
-
-        int nextTagStart;
-        string openTag, closeTag;
-        ConsoleColor? color = null;
-
-        if (nextThought == -1 && nextAnswer == -1) break;
-    // Skip any plain text before the next tag (we only output tagged content)
-        int nextStart = (nextThought == -1) ? nextAnswer : (nextAnswer == -1 ? nextThought : Math.Min(nextThought, nextAnswer));
-    if (nextStart > processedIdx) processedIdx = nextStart;
-        if (nextThought != -1 && (nextAnswer == -1 || nextThought < nextAnswer))
-        {
-            nextTagStart = nextThought; openTag = "<thought>"; closeTag = "</thought>"; color = ConsoleColor.DarkGray;
-        }
-        else
-        {
-            nextTagStart = nextAnswer; openTag = "<answer>"; closeTag = "</answer>"; color = null;
-        }
-
-        int closeIdx = s.IndexOf(closeTag, nextTagStart, StringComparison.OrdinalIgnoreCase);
-        if (closeIdx == -1) break; // wait for more data
-
-        int contentStart = nextTagStart + openTag.Length;
-        string content = s.Substring(contentStart, closeIdx - contentStart).Trim();
-        if (!string.Equals(content, "..."))
-        {
-            if (color.HasValue) Console.ForegroundColor = color.Value;
-            Console.WriteLine(content);
-            if (color.HasValue) Console.ResetColor();
-            printed = true;
-        }
-        processedIdx = closeIdx + closeTag.Length;
-    }
-    return printed;
 }
 
 static IEnumerable<OpenAI.Chat.ChatMessage> ConvertToOpenAiMessages(List<Microsoft.Extensions.AI.ChatMessage> history)
@@ -228,9 +172,175 @@ static string? ExtractTextDelta(object update)
 
 static async Task<string> StreamAndRenderAsync(ChatClient openAiChat, List<Microsoft.Extensions.AI.ChatMessage> history)
 {
+    // Aggregate full text to return for history
     var aggregated = new System.Text.StringBuilder();
-    int processedIdx = 0;
-    bool printedAny = false;
+
+    // Pending buffer for incremental parsing across chunk boundaries
+    var pending = new System.Text.StringBuilder();
+
+    // Streaming state
+    TagState state = TagState.Outside;
+
+    // Ephemeral thought rendering (single updating line)
+    var thoughtSoFar = new System.Text.StringBuilder();
+    int thoughtRenderLen = 0;
+    bool showingThought = false;
+    bool answerStarted = false;
+    int answerCharsWritten = 0; // tracks printed answer characters (for newline decisions)
+    bool answerClosed = false;  // tracks if we emitted the closing newline for <answer>
+
+    void RenderThoughtEphemeral()
+    {
+        // Render thought on a single line, updating in place; replace newlines
+        var text = thoughtSoFar.ToString().Replace('\r', ' ').Replace('\n', ' ').TrimStart();
+        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.Write('\r');
+        Console.Write(text);
+        int extra = Math.Max(0, thoughtRenderLen - text.Length);
+        if (extra > 0) Console.Write(new string(' ', extra));
+        thoughtRenderLen = text.Length;
+        Console.ResetColor();
+    }
+
+    void ClearThoughtEphemeral()
+    {
+        if (!showingThought && thoughtRenderLen == 0) return;
+        Console.Write('\r');
+        if (thoughtRenderLen > 0) Console.Write(new string(' ', thoughtRenderLen));
+        Console.Write('\r');
+        thoughtRenderLen = 0;
+        showingThought = false;
+        thoughtSoFar.Clear();
+    }
+
+    // Helper: process as much as possible from pending buffer
+    void ProcessPending()
+    {
+        while (true)
+        {
+            if (state == TagState.Outside)
+            {
+                var s = pending.ToString();
+                int idxT = s.IndexOf(openThought, StringComparison.OrdinalIgnoreCase);
+                int idxA = s.IndexOf(openAnswer, StringComparison.OrdinalIgnoreCase);
+                if (idxT == -1 && idxA == -1)
+                {
+                    // Keep only a small tail to catch split tags across chunks
+                    int keep = Math.Max(openThought.Length, openAnswer.Length) - 1;
+                    if (pending.Length > keep)
+                    {
+                        pending.Remove(0, pending.Length - keep);
+                    }
+                    break;
+                }
+
+                int nextIdx;
+                bool isThought;
+                if (idxT == -1) { nextIdx = idxA; isThought = false; }
+                else if (idxA == -1) { nextIdx = idxT; isThought = true; }
+                else if (idxT < idxA) { nextIdx = idxT; isThought = true; }
+                else { nextIdx = idxA; isThought = false; }
+
+                // Drop any text before the next start tag (omit untagged text)
+                if (nextIdx > 0) pending.Remove(0, nextIdx);
+
+                // Consume the opening tag and switch state
+                if (isThought)
+                {
+                    if (pending.Length >= openThought.Length)
+                    {
+                        pending.Remove(0, openThought.Length);
+                        state = TagState.InThought;
+                        showingThought = true;
+                        // Start rendering immediately (even if empty)
+                        RenderThoughtEphemeral();
+                    }
+                    else
+                    {
+                        // Wait for more chars of the opening tag
+                        break;
+                    }
+                }
+                else
+                {
+                    if (pending.Length >= openAnswer.Length)
+                    {
+                        pending.Remove(0, openAnswer.Length);
+                        // When answer starts, clear any ephemeral thought
+                        if (showingThought)
+                        {
+                            ClearThoughtEphemeral();
+                        }
+                        state = TagState.InAnswer;
+                        answerStarted = true;
+                        answerClosed = false;
+                    }
+                    else
+                    {
+                        break; // incomplete tag, wait for more
+                    }
+                }
+            }
+            else if (state == TagState.InThought)
+            {
+                var s = pending.ToString();
+                int closeIdx = s.IndexOf(closeThought, StringComparison.OrdinalIgnoreCase);
+                if (closeIdx != -1)
+                {
+                    // Append up to the closing tag and render; then consume close tag
+                    if (closeIdx > 0)
+                    {
+                        thoughtSoFar.Append(s.AsSpan(0, closeIdx).ToString());
+                        RenderThoughtEphemeral();
+                    }
+                    pending.Remove(0, closeIdx + closeThought.Length);
+                    state = TagState.Outside;
+                }
+                else
+                {
+                    // Stream partial content but keep a small tail to detect the closing tag across chunks
+                    int safeLen = Math.Max(0, pending.Length - (closeThought.Length - 1));
+                    if (safeLen > 0)
+                    {
+                        thoughtSoFar.Append(pending.ToString(0, safeLen));
+                        pending.Remove(0, safeLen);
+                        RenderThoughtEphemeral();
+                    }
+                    break; // wait for more
+                }
+            }
+            else // InAnswer
+            {
+                var s = pending.ToString();
+                int closeIdx = s.IndexOf(closeAnswer, StringComparison.OrdinalIgnoreCase);
+                if (closeIdx != -1)
+                {
+                    if (closeIdx > 0)
+                    {
+                        var chunk = s.AsSpan(0, closeIdx).ToString();
+                        Console.Write(chunk);
+                        answerCharsWritten += chunk.Length;
+                    }
+                    pending.Remove(0, closeIdx + closeAnswer.Length);
+                    state = TagState.Outside;
+                    Console.WriteLine(); // end the answer line
+                    answerClosed = true;
+                }
+                else
+                {
+                    int safeLen = Math.Max(0, pending.Length - (closeAnswer.Length - 1));
+                    if (safeLen > 0)
+                    {
+                        var chunk = pending.ToString(0, safeLen);
+                        Console.Write(chunk);
+                        answerCharsWritten += chunk.Length;
+                        pending.Remove(0, safeLen);
+                    }
+                    break; // wait for more
+                }
+            }
+        }
+    }
 
     var oaMessages = ConvertToOpenAiMessages(history);
 
@@ -240,17 +350,34 @@ static async Task<string> StreamAndRenderAsync(ChatClient openAiChat, List<Micro
         if (string.IsNullOrEmpty(deltaText)) continue;
 
         aggregated.Append(deltaText);
-        printedAny |= TryFlushCompletedSections(aggregated, ref processedIdx);
+        pending.Append(deltaText);
+        ProcessPending();
     }
 
-    if (!printedAny)
+    // Stream finished:
+    // 1) Always clear any ephemeral thought line so it doesn't remain visible
+    if (showingThought)
     {
-        PrintFormattedResponse(aggregated.ToString());
+        ClearThoughtEphemeral();
     }
-    else
+
+    // 2) If the stream ended while still inside an <answer> without emitting a newline,
+    //    ensure we end the line exactly once so the next prompt starts on a new line
+    if (state == TagState.InAnswer && answerCharsWritten > 0 && !answerClosed)
     {
-        TryFlushCompletedSections(aggregated, ref processedIdx);
-    // Drop any trailing untagged text entirely
+        Console.WriteLine();
+        answerClosed = true;
+    }
+
+    // 3) If no answer was streamed, try a non-stream fallback: parse the aggregated
+    //    text and print only the <answer> content (keeping thoughts hidden)
+    if (!answerStarted)
+    {
+        var (_, answers) = ExtractSections(aggregated.ToString());
+        foreach (var a in answers)
+        {
+            Console.WriteLine(a);
+        }
     }
 
     return aggregated.ToString();
@@ -452,6 +579,13 @@ static class LineEditor
             }
         }
     }
+}
+
+enum TagState
+{
+    Outside,
+    InThought,
+    InAnswer
 }
 
 #endregion

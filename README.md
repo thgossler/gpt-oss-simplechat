@@ -48,12 +48,6 @@ Run the produced app (adjust path if using Release):
 dotnet run
 ```
 
-or
-
-```bash
-./bin/Debug/net9.0/gpt-oss-simplechat
-```
-
 ## Notes
 
 - Make sure your local server is running and the model is loaded before starting the app, otherwise requests will fail.
