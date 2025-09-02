@@ -9,7 +9,10 @@
 # - Start LM Studio local server on default port 1234
 
 param(
-  [string]$Model = "openai/gpt-oss-20b"
+  [string]$Model = "openai/gpt-oss-20b",
+  [int]$ContextLength = 0,      # 0 = use LM Studio default
+  [string]$Gpu = "",           # "off" | "max" | "0-1 fraction" | empty = default
+  [switch]$Exact                 # pass --exact to avoid ambiguous matches
 )
 
 $ErrorActionPreference = 'Stop'
@@ -17,6 +20,28 @@ $ErrorActionPreference = 'Stop'
 function Write-Info($msg) { Write-Host "[INFO] $msg" -ForegroundColor Cyan }
 function Write-Warn($msg) { Write-Host "[WARN] $msg" -ForegroundColor Yellow }
 function Write-Err($msg)  { Write-Host "[ERROR] $msg" -ForegroundColor Red }
+
+function Is-ModelLoaded([string]$model) {
+  try {
+    $jsonOut = lms ps --json 2>$null
+    if ($jsonOut) {
+      try {
+        $items = $jsonOut | ConvertFrom-Json
+        foreach ($m in $items) {
+          if ($null -ne $m) {
+            $fields = @($m.identifier, $m.path, $m.name)
+            foreach ($f in $fields) {
+              if ($f -and ($f -like "*$model*")) { return $true }
+            }
+          }
+        }
+      } catch {}
+    }
+    $txtOut = lms ps 2>$null
+    if ($txtOut -and ($txtOut -match [regex]::Escape($model))) { return $true }
+  } catch {}
+  return $false
+}
 
 function Test-DotNet9Installed {
   $dotnetCmd = Get-Command dotnet -ErrorAction SilentlyContinue
@@ -118,7 +143,12 @@ function Start-LMStudioServerAndModel {
   if (-not (Get-Command lms -ErrorAction SilentlyContinue)) {
     # Try to resolve from known path
     $candidate = "$HOME/.lmstudio/bin/lms"
-    if (Test-Path $candidate) { $env:PATH += ";$HOME/.lmstudio/bin" }
+    if (Test-Path $candidate) {
+      $pathSep = if ($IsWindows) { ';' } else { ':' }
+      if (-not ($env:PATH -split [regex]::Escape($pathSep) | Where-Object { $_ -eq "$HOME/.lmstudio/bin" })) {
+        $env:PATH = "$env:PATH$pathSep$HOME/.lmstudio/bin"
+      }
+    }
   }
 
   Write-Info "Starting LM Studio local server (port 1234)..."
@@ -127,17 +157,52 @@ function Start-LMStudioServerAndModel {
   Write-Info "Ensuring model is downloaded: $Model"
   # Newer versions: `lms get <model>`, fallback to `lms load` which downloads on demand
   $got = $false
-  try { lms get $Model | Out-Null; $got = $true } catch {}
+  try {
+    if ($Exact) {
+      lms get $Model --yes --exact | Out-Null
+    } else {
+      lms get $Model --yes | Out-Null
+    }
+    $got = $true
+  } catch {}
   if (-not $got) {
     Write-Warn "'lms get' failed or unavailable. Will attempt to load the model which downloads if missing."
   }
 
-  Write-Info "Loading model: $Model (GPU auto)"
-  try {
-    lms load $Model --gpu=auto | Out-Null
-  } catch {
-    Write-Err "Failed to load model '$Model'. Open LM Studio and try from the GUI to diagnose, then re-run."
-    exit 30
+  # Skip loading if already loaded
+  if (Is-ModelLoaded $Model) {
+    Write-Info "Model '$Model' is already loaded; skipping load."
+    Write-Info "LM Studio is ready. OpenAI-compatible API at http://localhost:1234/v1/"
+    return
+  }
+
+  Write-Info "Loading model: $Model (default GPU offloading)"
+  # Build load args allowing optional overrides
+  $loadArgs = @()
+  if ($Exact) { $loadArgs += '--exact' }
+  $loadArgs += @($Model, '--yes')
+  if ($Gpu -ne '') { $loadArgs += @('--gpu', $Gpu) }
+  if ($ContextLength -gt 0) { $loadArgs += @('--context-length', $ContextLength) }
+
+  & lms load @loadArgs | Out-Null
+  $ec = $LASTEXITCODE
+  if ($ec -ne 0) {
+    Write-Warn "Initial load failed (exit code $ec), possibly due to guardrails. Retrying with conservative settings..."
+    # Fallback: smaller context and minimal GPU offloading to reduce memory pressure
+    $fallbackArgs = @()
+    if ($Exact) { $fallbackArgs += '--exact' }
+    $fallbackArgs += @($Model, '--yes', '--context-length', '4096')
+    if ($Gpu -eq '') { $fallbackArgs += @('--gpu', 'off') } else { $fallbackArgs += @('--gpu', $Gpu) }
+
+    & lms load @fallbackArgs | Out-Null
+    $ec2 = $LASTEXITCODE
+    if ($ec2 -ne 0) {
+      Write-Err "Failed to load model '$Model' (exit code $ec2). If the GUI can load it, reduce or disable 'Model Loading Guardrails' in LM Studio Settings and re-run."
+      Write-Err "Alternatively, try: lms load $Model --yes --context-length 4096 --gpu off"
+      exit 30
+    } else {
+      Write-Info "Loaded with fallback settings: --context-length 4096 $(if($Gpu -eq ''){'--gpu off'}else{"--gpu $Gpu"})."
+    }
   }
 
   Write-Info "LM Studio is ready. OpenAI-compatible API at http://localhost:1234/v1/"
