@@ -1,0 +1,29 @@
+# Build artifacts
+bin/
+obj/
+
+# VS/IDE
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Rider
+.idea/
+
+# VS Code settings (optional: comment out if you want to commit settings)
+.vscode/
+
+# Mac
+.DS_Store
+
+# Test results
+TestResults/
+
+# Logs
+*.log
+
+# Other
+*.cache
+*.tmp
