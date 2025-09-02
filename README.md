@@ -92,8 +92,10 @@ pwsh -File ./install.ps1
 Choose a different model:
 
 ```pwsh
-pwsh -File ./install.ps1 -Model "mlx-community/pixtral-12b-4bit"
+pwsh -File ./install.ps1 -Model "lmstudio-community/Phi-3.5-mini-instruct-GGUF/Phi-3.5-mini-instruct-Q4_K_M.gguf"
 ```
+
+Tip: Use the exact GGUF filename shown on the model page in LM Studio to lock the quantization you want.
 
 After the script completes, LM Studio’s OpenAI-compatible API should be available at:
 http://localhost:1234/v1/
