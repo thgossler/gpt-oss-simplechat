@@ -4,6 +4,7 @@ A tiny .NET 9 console app that let's you chat with a local LLM (`gpt-oss-20b` by
 
 ## Requirements
 
+- Windows, MacOS or Linux
 - .NET 9 SDK
 - LM Studio (or any OpenAI-compatible server) running locally
   - Default endpoint used in this app: `http://localhost:1234/v1`
