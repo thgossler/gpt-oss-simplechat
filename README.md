@@ -90,7 +90,7 @@ What the installer does:
 1) Installs LM Studio if missing
   - macOS: `brew install --cask lm-studio`
   - Windows: `winget install --id ElementLabs.LMStudio -e`
-  - Linux: prompts to download the AppImage from https://lmstudio.ai/download
+  - Linux: prompts to download the AppImage from `https://lmstudio.ai/download`
 
 2) Ensures .NET 9 SDK is installed (winget/brew/dotnet-install)
 
@@ -120,7 +120,7 @@ pwsh -File ./install.ps1 -Model "lmstudio-community/Phi-3.5-mini-instruct-GGUF/P
 Tip: Use the exact GGUF filename shown on the model page in LM Studio to lock the quantization you want.
 
 After the script completes, LM Studio’s OpenAI-compatible API should be available at:
-http://localhost:1234/v1/
+`http://localhost:1234/v1/`
 
 Then run the app:
 
