@@ -2,6 +2,10 @@
 
 A tiny .NET 9 console app that let's you chat with a local LLM (`gpt-oss-20b` by default) via LM Studio using the OpenAI-compatible API and `Microsoft.Extensions.AI` adapters. It streams responses and separates internal thoughts from the final answer.
 
+<div align="center">
+  <img width="871" height="391" alt="Screenshot" src="https://github.com/user-attachments/assets/4e7bf34f-4007-49ca-83f5-08958f83483d" />
+</div>
+
 ## Requirements
 
 - Windows, MacOS or Linux
