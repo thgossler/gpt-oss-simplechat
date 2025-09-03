@@ -29,6 +29,7 @@ A tiny .NET 9 console app that let's you chat with a local LLM (`gpt-oss-20b` by
 - LM Studio (or any OpenAI-compatible server) running locally
   - Default endpoint used in this app: `http://localhost:1234/v1`
   - Dummy API key is accepted by LM Studio: "lm-studio"
+- For the oss-gpt-20b model at least 16 GB GPU VRAM or 16 GB Unified Memory on Apple Silicon (you can use another smaller model)
 
 ## Dependencies
 
