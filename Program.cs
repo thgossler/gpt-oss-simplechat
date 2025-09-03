@@ -46,8 +46,10 @@ You are a helpful assistant. Keep your answers concise.
 """)
 };
 
-Console.WriteLine("Type 'exit' to quit.\n");
-Console.WriteLine("Starting chat...\nEnter your message:");
+Console.WriteLine($"Using model '{modelId}' on endpoint '{endpoint}'");
+Console.WriteLine("Starting chat...");
+Console.WriteLine("Type 'exit' to quit");
+Console.WriteLine("Enter your message:");
 
 while (true)
 {
