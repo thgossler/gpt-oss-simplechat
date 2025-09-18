@@ -21,9 +21,32 @@ function Write-Info($msg) { Write-Host "[INFO] $msg" -ForegroundColor Cyan }
 function Write-Warn($msg) { Write-Host "[WARN] $msg" -ForegroundColor Yellow }
 function Write-Err($msg)  { Write-Host "[ERROR] $msg" -ForegroundColor Red }
 
+function Resolve-LmsPath {
+  if (Get-Command lms -ErrorAction SilentlyContinue) { return 'lms' }
+  if ($IsWindows) {
+    $candidates = @(
+      "$HOME/.lmstudio/bin/lms.exe",
+      "$env:USERPROFILE/.lmstudio/bin/lms.exe"
+    )
+  } else {
+    $candidates = @(
+      "$HOME/.lmstudio/bin/lms",
+      "/opt/homebrew/bin/lms",
+      "/usr/local/bin/lms",
+      "/Applications/LM Studio.app/Contents/Resources/app/bin/lms",
+      "/Applications/LM Studio.app/Contents/MacOS/lms"
+    )
+  }
+  foreach ($p in $candidates) { if ($p -and (Test-Path $p)) { return $p } }
+  return $null
+}
+
+$script:LmsCmd = $null
+
 function Is-ModelLoaded([string]$model) {
   try {
-    $jsonOut = lms ps --json 2>$null
+    if (-not $script:LmsCmd) { return $false }
+    $jsonOut = & $script:LmsCmd ps --json 2>$null
     if ($jsonOut) {
       try {
         $items = $jsonOut | ConvertFrom-Json
@@ -37,7 +60,7 @@ function Is-ModelLoaded([string]$model) {
         }
       } catch {}
     }
-    $txtOut = lms ps 2>$null
+    $txtOut = & $script:LmsCmd ps 2>$null
     if ($txtOut -and ($txtOut -match [regex]::Escape($model))) { return $true }
   } catch {}
   return $false
@@ -127,41 +150,78 @@ function Ensure-LMStudioInstalled {
   }
 }
 
+function Ensure-LMStudioStartedOnMac {
+  if (-not $IsMacOS) { return }
+  Write-Info "Launching LM Studio to bypass macOS security prompts..."
+  Write-Info "If prompted by macOS, click 'Open' to allow LM Studio to run."
+  try {
+    & /usr/bin/open -a "LM Studio" | Out-Null
+  } catch {
+    Write-Warn "Failed to launch LM Studio via 'open'. Start it once from /Applications manually, then re-run this script."
+  }
+  # Wait briefly to allow first-run initialization and user approval
+  $maxWaitSec = 90
+  for ($i = 0; $i -lt $maxWaitSec; $i += 3) {
+    Start-Sleep -Seconds 3
+    $script:LmsCmd = if ($script:LmsCmd) { $script:LmsCmd } else { Resolve-LmsPath }
+    if ($script:LmsCmd) { break }
+  }
+}
+
 function Ensure-LmsBootstrapped {
   # lms ships under ~/.lmstudio/bin; bootstrap adds it to PATH
   $lmsPath = "$HOME/.lmstudio/bin/lms"
   $lmsExePath = "$HOME/.lmstudio/bin/lms.exe"
+  $resolved = Resolve-LmsPath
+  if ($resolved) {
+    $script:LmsCmd = $resolved
+    try { & $script:LmsCmd bootstrap | Out-Null } catch {}
+    return
+  }
   if ($IsWindows -and (Test-Path $lmsExePath)) {
-    cmd /c "%USERPROFILE%/.lmstudio/bin/lms.exe bootstrap" | Out-Null
+    try { cmd /c "%USERPROFILE%/.lmstudio/bin/lms.exe bootstrap" | Out-Null } catch {}
+    $script:LmsCmd = Resolve-LmsPath
   } elseif (Test-Path $lmsPath) {
-    & $lmsPath bootstrap | Out-Null
+    try { & $lmsPath bootstrap | Out-Null } catch {}
+    $script:LmsCmd = Resolve-LmsPath
+  } elseif ($IsMacOS) {
+    $bundleCli = "/Applications/LM Studio.app/Contents/Resources/app/bin/lms"
+    if (Test-Path $bundleCli) {
+      try { & $bundleCli bootstrap | Out-Null } catch {}
+      $script:LmsCmd = Resolve-LmsPath
+    }
   }
 }
 
 function Start-LMStudioServerAndModel {
   # Ensure server is running and model is available
-  if (-not (Get-Command lms -ErrorAction SilentlyContinue)) {
-    # Try to resolve from known path
-    $candidate = "$HOME/.lmstudio/bin/lms"
-    if (Test-Path $candidate) {
-      $pathSep = if ($IsWindows) { ';' } else { ':' }
-      if (-not ($env:PATH -split [regex]::Escape($pathSep) | Where-Object { $_ -eq "$HOME/.lmstudio/bin" })) {
-        $env:PATH = "$env:PATH$pathSep$HOME/.lmstudio/bin"
+  if (-not $script:LmsCmd) { $script:LmsCmd = Resolve-LmsPath }
+  if (-not $script:LmsCmd) {
+    $pathSep = if ($IsWindows) { ';' } else { ':' }
+    $candidateDir = "$HOME/.lmstudio/bin"
+    if (Test-Path $candidateDir) {
+      if (-not ($env:PATH -split [regex]::Escape($pathSep) | Where-Object { $_ -eq $candidateDir })) {
+        $env:PATH = "$env:PATH$pathSep$candidateDir"
       }
+      $script:LmsCmd = Resolve-LmsPath
     }
+  }
+  if (-not $script:LmsCmd) {
+    Write-Err "Could not find the 'lms' CLI. On macOS, open LM Studio once, then ensure the CLI is installed (Settings → System → CLI). Alternatively, verify '$HOME/.lmstudio/bin/lms' exists."
+    exit 22
   }
 
   Write-Info "Starting LM Studio local server (port 1234)..."
-  try { lms server start | Out-Null } catch { Write-Warn "lms server start failed or already running; continuing..." }
+  try { & $script:LmsCmd server start | Out-Null } catch { Write-Warn "lms server start failed or already running; continuing..." }
 
   Write-Info "Ensuring model is downloaded: $Model"
   # Newer versions: `lms get <model>`, fallback to `lms load` which downloads on demand
   $got = $false
   try {
     if ($Exact) {
-      lms get $Model --yes --exact | Out-Null
+      & $script:LmsCmd get $Model --yes --exact | Out-Null
     } else {
-      lms get $Model --yes | Out-Null
+      & $script:LmsCmd get $Model --yes | Out-Null
     }
     $got = $true
   } catch {}
@@ -184,7 +244,7 @@ function Start-LMStudioServerAndModel {
   if ($Gpu -ne '') { $loadArgs += @('--gpu', $Gpu) }
   if ($ContextLength -gt 0) { $loadArgs += @('--context-length', $ContextLength) }
 
-  & lms load @loadArgs | Out-Null
+  & $script:LmsCmd load @loadArgs | Out-Null
   $ec = $LASTEXITCODE
   if ($ec -ne 0) {
     Write-Warn "Initial load failed (exit code $ec), possibly due to guardrails. Retrying with conservative settings..."
@@ -194,7 +254,7 @@ function Start-LMStudioServerAndModel {
     $fallbackArgs += @($Model, '--yes', '--context-length', '4096')
     if ($Gpu -eq '') { $fallbackArgs += @('--gpu', 'off') } else { $fallbackArgs += @('--gpu', $Gpu) }
 
-    & lms load @fallbackArgs | Out-Null
+    & $script:LmsCmd load @fallbackArgs | Out-Null
     $ec2 = $LASTEXITCODE
     if ($ec2 -ne 0) {
       Write-Err "Failed to load model '$Model' (exit code $ec2). If the GUI can load it, reduce or disable 'Model Loading Guardrails' in LM Studio Settings and re-run."
@@ -214,6 +274,8 @@ Ensure-DotNet9Installed
 
 Write-Info "Ensuring LM Studio is installed..."
 Ensure-LMStudioInstalled
+
+Ensure-LMStudioStartedOnMac
 
 Write-Info "Bootstrapping lms CLI..."
 Ensure-LmsBootstrapped
